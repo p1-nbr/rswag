@@ -157,7 +157,7 @@ module Rswag
         request[:path] = template.tap do |path_template|
           parameters.select { |p| p[:in] == :path }.each do |p|
             begin
-              param_value = params.fetch(p[:name].to_s).to_s
+              param_value = params.fetch(p[:name]).to_s
             rescue KeyError
               raise ArgumentError, ("`#{p[:name]}`" \
                 'parameter key present, but not defined within example group' \
