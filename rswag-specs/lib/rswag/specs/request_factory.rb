@@ -39,13 +39,17 @@ module Rswag
 
         # NOTE: Use of + instead of concat to avoid mutation of the metadata object
         (operation_params + path_item_params + security_params)
-          .map { |p| p['$ref'] ? resolve_parameter(p['$ref'], openapi_spec) : p }
+          .map { |p| param_has_ref?(p) ? resolve_parameter(p, openapi_spec) : p }
           .uniq { |p| p[:name] }
           .reject do |p|
             p[:required] == false &&
               !headers.key?(p[:name]) &&
               !params.key?(p[:name])
           end
+      end
+
+      def param_has_ref?(param)
+        param.key?(:$ref) || param[:schema]&.key?(:$ref)
       end
 
       def derive_security_params(metadata, openapi_spec)
@@ -64,16 +68,68 @@ module Rswag
         (components[:securitySchemes] || {}).slice(*scheme_names).values
       end
 
-      def resolve_parameter(ref, openapi_spec)
-        key = key_version(ref, openapi_spec)
-        definitions = definition_version(openapi_spec)
-        raise "Referenced parameter '#{ref}' must be defined" unless definitions && definitions[key]
-
-        definitions[key]
+      def resolve_parameter(param, openapi_spec)
+        ref = get_parameter_ref(param)
+        schema = get_referenced_object(ref, openapi_spec)
+        param[:schema] = schema
+        param
       end
 
-      def key_version(ref, _openapi_spec)
-        ref.sub('#/components/parameters/', '').to_sym
+      def get_parameter_ref(param)
+        param[:$ref] || param.dig(:schema, :$ref)
+      end
+
+      def get_referenced_object(ref, openapi_spec)
+        return {} if ref.nil?
+
+        raise "Invalid object reference '#{ref}'" unless valid_openapi_ref?(ref)
+
+        ref_parts = ref_parts(ref)
+
+        object = openapi_spec.dig(*ref_parts)
+        raise "Referenced object '#{ref}' cannot be found" if object.nil?
+
+        object
+      end
+
+      SECTIONS = %w[
+        schemas
+        parameters
+        responses
+        requestBodies
+        headers
+        securitySchemes
+        links
+        callbacks
+        examples
+      ].freeze
+      REFERENCE_PATTERN = "#/components/(#{SECTIONS.join('|')})/[\\w.-]+".freeze
+
+      def valid_openapi_ref?(ref)
+        return false unless ref.is_a?(String) && !ref.empty?
+
+        local_ref?(ref) || external_ref?(ref)
+      end
+
+      def local_ref?(ref)
+        # Local reference: #/components/{type}/{name}
+        ref.match?(/^#{REFERENCE_PATTERN}$/)
+      end
+
+      def external_ref?(ref)
+        # External reference: {uri}#/components/{type}/{name}
+        valid_uri?(ref) && ref.match?(/#{REFERENCE_PATTERN}/)
+      end
+
+      def valid_uri?(uri)
+        URI.parse(uri)
+        true
+      rescue URI::InvalidURIError
+        false
+      end
+
+      def ref_parts(ref)
+        ref.sub(%r{#/}, '').split('/').map(&:to_sym)
       end
 
       def definition_version(openapi_spec)
