@@ -222,29 +222,44 @@ module Rswag
           when :form
             return value.to_query(param[:name]) if explode
 
-            "#{escaped_name}=" + value.to_a.flatten.map { |v| CGI.escape(v.to_s) }.join(',')
+            "#{escaped_name}=" + value.to_a.flatten.map { |v| escape_value(v) }.join(',')
 
           end
         when :array
           value = value.to_a.flatten
-          items_type = param.dig(:schema, :items, :type)
-          separator = SEPARATOR[style.to_sym]
+          items_type = param.dig(:schema, :items, :type).to_sym
+          separator = SEPARATOR[style]
 
           if explode
-            exploded_value = case items_type.to_sym
+            # Special handling for different types with explode=true
+            if items_type == :object && value.first.is_a?(Hash)
+              # Use to_query directly for array of hashes
+              param_vals = { param[:name] => {} }
+              value.each_with_index { |v, idx| param_vals[param[:name]][idx.to_s] = v }
+              query_string = param_vals.to_query
+            else
+              # For all other cases, generate array of values and join
+              array_values = case items_type.to_sym
                              when :object, :array
                                value.map { |v| v.to_query(param[:name]) }
                              else
-                               value.map { |v| CGI.escape(v.to_s) }
+                               value.map { |v| escape_value(v) }
                              end
-
-            exploded_value.join(separator)
+              
+              query_string = array_values.join(separator)
+            end
+            
+            query_string
           else
-            "#{escaped_name}=" + value.map { |v| GI.escape(v.to_s) }.join(separator)
+            "#{escaped_name}=" + value.map { |v| escape_value(v) }.join(separator)
           end
         else
-          "#{escaped_name}=#{CGI.escape(value.to_s)}"
+          "#{escaped_name}=#{escape_value(value)}"
         end
+      end
+
+      def escape_value(value)
+        CGI.escape(value.to_s)
       end
 
       def add_headers(request, metadata, openapi_spec, parameters, example)
