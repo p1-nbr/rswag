@@ -39,7 +39,7 @@ module Rswag
 
         # NOTE: Use of + instead of concat to avoid mutation of the metadata object
         (operation_params + path_item_params + security_params)
-          .map { |p| param_has_ref?(p) ? resolve_parameter(p, openapi_spec) : p }
+          .map { |prm| has_ref?(prm) ? resolve_parameter(prm, openapi_spec, schema_key: :schema) : prm }
           .uniq { |p| p[:name] }
           .reject do |p|
             p[:required] == false &&
@@ -48,8 +48,53 @@ module Rswag
           end
       end
 
-      def param_has_ref?(param)
-        param.key?(:$ref) || param[:schema]&.key?(:$ref)
+      def has_ref?(object)
+        return false unless object.is_a?(Hash)
+
+        object[:$ref] || object.any? { |_, v| has_ref?(v) }
+      end
+
+      def resolve_parameter(object, openapi_spec, schema_key: nil)
+        return object unless object.is_a?(Hash)
+
+        ref = get_ref(object, schema_key)
+
+        unless ref.nil?
+          ref_obj = resolve_reference(ref, openapi_spec)
+          unless ref_obj.nil?
+            if schema_key.nil?
+              object.merge!(ref_obj)
+            else
+              object[schema_key].merge!(ref_obj)
+            end
+          end
+        end
+
+        object.each do |key, val|
+          object[key] = resolve_parameter(val, openapi_spec)
+        end
+
+        object
+      end
+
+      def get_ref(object, key)
+        if key.nil?
+          object.delete(:$ref)
+        else
+          object[key].delete(:$ref)
+        end
+      end
+
+      def resolve_reference(ref, openapi_spec)
+        return if ref.nil?
+
+        raise "Invalid object reference '#{ref}'" unless valid_openapi_ref?(ref)
+
+        ref_parts = ref_parts(ref)
+        object = openapi_spec.dig(*ref_parts)
+        raise "Cannot resolve referenced object '#{ref}'" if object.nil?
+
+        object
       end
 
       def derive_security_params(metadata, openapi_spec)
@@ -66,30 +111,6 @@ module Rswag
       def security_version(scheme_names, openapi_spec)
         components = openapi_spec[:components] || {}
         (components[:securitySchemes] || {}).slice(*scheme_names).values
-      end
-
-      def resolve_parameter(param, openapi_spec)
-        ref = get_parameter_ref(param)
-        schema = get_referenced_object(ref, openapi_spec)
-        param[:schema] = schema
-        param
-      end
-
-      def get_parameter_ref(param)
-        param[:$ref] || param.dig(:schema, :$ref)
-      end
-
-      def get_referenced_object(ref, openapi_spec)
-        return {} if ref.nil?
-
-        raise "Invalid object reference '#{ref}'" unless valid_openapi_ref?(ref)
-
-        ref_parts = ref_parts(ref)
-
-        object = openapi_spec.dig(*ref_parts)
-        raise "Referenced object '#{ref}' cannot be found" if object.nil?
-
-        object
       end
 
       SECTIONS = %w[
@@ -173,6 +194,13 @@ module Rswag
         end
       end
 
+      SEPARATOR = {
+        form: '&',
+        matrix: ';',
+        label: '.',
+        spaceDelimited: '%20',
+        pipeDelimited: '|'
+      }.freeze
       def build_query_string_part(param, value, _openapi_spec)
         raise ArgumentError, "'type' is not supported field for Parameter" unless param[:type].nil?
 
@@ -192,22 +220,27 @@ module Rswag
           when :deepObject
             { name => value }.to_query
           when :form
-            return value.to_query if explode
+            return value.to_query(param[:name]) if explode
 
             "#{escaped_name}=" + value.to_a.flatten.map { |v| CGI.escape(v.to_s) }.join(',')
 
           end
         when :array
-          case explode
-          when true
-            value.to_a.flatten.map { |v| "#{escaped_name}=#{CGI.escape(v.to_s)}" }.join('&')
+          value = value.to_a.flatten
+          items_type = param.dig(:schema, :items, :type)
+          separator = SEPARATOR[style.to_sym]
+
+          if explode
+            exploded_value = case items_type.to_sym
+                             when :object, :array
+                               value.map { |v| v.to_query(param[:name]) }
+                             else
+                               value.map { |v| CGI.escape(v.to_s) }
+                             end
+
+            exploded_value.join(separator)
           else
-            separator = case style
-                        when :form then ','
-                        when :spaceDelimited then '%20'
-                        when :pipeDelimited then '|'
-                        end
-            "#{escaped_name}=" + value.to_a.flatten.map { |v| CGI.escape(v.to_s) }.join(separator)
+            "#{escaped_name}=" + value.map { |v| GI.escape(v.to_s) }.join(separator)
           end
         else
           "#{escaped_name}=#{CGI.escape(value.to_s)}"
