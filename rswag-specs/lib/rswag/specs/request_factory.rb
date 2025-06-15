@@ -243,9 +243,9 @@ module Rswag
                              when :object, :array
                                value.map { |v| v.to_query(param[:name]) }
                              else
-                               value.map { |v| escape_value(v) }
+                               value.map { |v| { "#{param[:name]}[]" => escape_value(v) }.to_query }
                              end
-              
+
               query_string = array_values.join(separator)
             end
             
