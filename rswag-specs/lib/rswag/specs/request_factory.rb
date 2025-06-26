@@ -14,8 +14,18 @@ module Rswag
         @config = config
         @example = example
         @metadata = metadata
-        @params = example.respond_to?(:request_params) ? example.request_params : {}
-        @headers = example.respond_to?(:request_headers) ? example.request_headers : {}
+        @params = to_indifferent_hash(example, :request_params)
+        @headers = to_indifferent_hash(example, :request_headers)
+      end
+
+      def to_indifferent_hash(example, key)
+        if example.respond_to?(key)
+          example.send(key)
+        else
+          {}
+        end.with_indifferent_access
+      rescue NoMethodError
+        raise ArgumentError, "#{key} must be a Hash"
       end
 
       def build_request
